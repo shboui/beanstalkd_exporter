@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	address            = flag.String("beanstalkd.address", "localhost:11300", "Beanstalkd server address")
+	address            = flag.String("beanstalkd.address", "localhost:11300,localhost:11301", "Beanstalkd server address")
 	connectionTimeout  = flag.Duration("beanstalkd.connection-timeout", 0, "Timeout value for tcp connection to Beanstalkd")
 	logLevel           = flag.String("log.level", "warning", "The log level.")
 	mappingConfig      = flag.String("mapping-config", "", "A file that describes a mapping of tube names.")

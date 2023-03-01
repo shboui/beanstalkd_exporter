@@ -21,7 +21,7 @@ type Exporter struct {
 	// use to protect against concurrent collection
 	mutex sync.RWMutex
 
-	conn    io.ReadWriteCloser
+	conns   []io.ReadWriteCloser
 	address string
 
 	connectionTimeout time.Duration
@@ -73,6 +73,18 @@ func NewExporter(address string) *Exporter {
 		cherrs: cherrs,
 	}
 
+	// init conns
+	bts := strings.Split(exporter.address, ",")
+	for _, bt := range bts {
+		conn, err := newLazyConn(bt, dialTimeout, exporter.connectionTimeout)
+		if err != nil {
+			exporter.scrapeConnectionErrorMetric.Inc()
+			log.Warnf("unable to connect to beanstalkd: %s", err)
+			continue
+		}
+		exporter.conns = append(exporter.conns, conn)
+	}
+
 	go func(e *Exporter) {
 		for {
 			log.Errorln(<-cherrs)
@@ -104,21 +116,29 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 
 	// TODO: move this init to the NewExporter
 	// if we release a new major version.
-	if e.conn == nil {
-		conn, err := newLazyConn(e.address, dialTimeout, e.connectionTimeout)
-		if err != nil {
-			e.scrapeConnectionErrorMetric.Inc()
-			log.Warnf("unable to connect to beanstalkd: %s", err)
-			return
+	// if e.conn == nil {
+	// 	conn, err := newLazyConn(e.address, dialTimeout, e.connectionTimeout)
+	// 	if err != nil {
+	// 		e.scrapeConnectionErrorMetric.Inc()
+	// 		log.Warnf("unable to connect to beanstalkd: %s", err)
+	// 		return
+	// 	}
+	// 	e.conn = conn
+	// }
+
+	for _, conn := range e.conns {
+		client := beanstalk.NewConn(conn)
+		collectors := e.scrape(client)
+		for _, collector := range collectors {
+			collector.Describe(ch)
 		}
-		e.conn = conn
 	}
 
-	client := beanstalk.NewConn(e.conn)
-	collectors := e.scrape(client)
-	for _, collector := range collectors {
-		collector.Describe(ch)
-	}
+	// client := beanstalk.NewConn(e.conn)
+	// collectors := e.scrape(client)
+	// for _, collector := range collectors {
+	// 	collector.Describe(ch)
+	// }
 }
 
 // Collect implements the prometheus.Collector interface, emits on the chan all
@@ -135,21 +155,28 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 
 	// TODO: move this init to the NewExporter
 	// if we release a new major version.
-	if e.conn == nil {
-		conn, err := newLazyConn(e.address, dialTimeout, e.connectionTimeout)
-		if err != nil {
-			e.scrapeConnectionErrorMetric.Inc()
-			log.Warnf("unable to connect to beanstalkd: %s", err)
-			return
-		}
-		e.conn = conn
-	}
+	// if e.conn == nil {
+	// 	conn, err := newLazyConn(e.address, dialTimeout, e.connectionTimeout)
+	// 	if err != nil {
+	// 		e.scrapeConnectionErrorMetric.Inc()
+	// 		log.Warnf("unable to connect to beanstalkd: %s", err)
+	// 		return
+	// 	}
+	// 	e.conn = conn
+	// }
 
-	client := beanstalk.NewConn(e.conn)
-	collectors := e.scrape(client)
-	for _, collector := range collectors {
-		collector.Collect(ch)
+	for _, conn := range e.conns {
+		client := beanstalk.NewConn(conn)
+		collectors := e.scrape(client)
+		for _, collector := range collectors {
+			collector.Collect(ch)
+		}
 	}
+	// client := beanstalk.NewConn(e.conn)
+	// collectors := e.scrape(client)
+	// for _, collector := range collectors {
+	// 	collector.Collect(ch)
+	// }
 }
 
 // scrape retrieves all the available metrics and invoke the given callback on each of them.
