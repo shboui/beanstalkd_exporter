@@ -21,8 +21,8 @@ type Exporter struct {
 	// use to protect against concurrent collection
 	mutex sync.RWMutex
 
-	conns   []io.ReadWriteCloser
-	address string
+	conns     []*btconn
+	addresses string
 
 	connectionTimeout time.Duration
 
@@ -40,10 +40,15 @@ type Exporter struct {
 	cherrs chan error
 }
 
-func NewExporter(address string) *Exporter {
+type btconn struct {
+	address string
+	conn    io.ReadWriteCloser
+}
+
+func NewExporter(addresses string) *Exporter {
 	cherrs := make(chan error)
 	exporter := &Exporter{
-		address: address,
+		addresses: addresses,
 		scrapeCountMetric: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: "beanstalkd",
@@ -74,15 +79,19 @@ func NewExporter(address string) *Exporter {
 	}
 
 	// init conns
-	bts := strings.Split(exporter.address, ",")
-	for _, bt := range bts {
-		conn, err := newLazyConn(bt, dialTimeout, exporter.connectionTimeout)
+	addrs := strings.Split(exporter.addresses, ",")
+	for _, addr := range addrs {
+		conn, err := newLazyConn(addr, dialTimeout, exporter.connectionTimeout)
 		if err != nil {
 			exporter.scrapeConnectionErrorMetric.Inc()
 			log.Warnf("unable to connect to beanstalkd: %s", err)
 			continue
 		}
-		exporter.conns = append(exporter.conns, conn)
+		connInfo := &btconn{
+			address: addr,
+			conn:    conn,
+		}
+		exporter.conns = append(exporter.conns, connInfo)
 	}
 
 	go func(e *Exporter) {
@@ -127,8 +136,8 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	// }
 
 	for _, conn := range e.conns {
-		client := beanstalk.NewConn(conn)
-		collectors := e.scrape(client)
+		client := beanstalk.NewConn(conn.conn)
+		collectors := e.scrape(client, conn.address)
 		for _, collector := range collectors {
 			collector.Describe(ch)
 		}
@@ -166,8 +175,8 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	// }
 
 	for _, conn := range e.conns {
-		client := beanstalk.NewConn(conn)
-		collectors := e.scrape(client)
+		client := beanstalk.NewConn(conn.conn)
+		collectors := e.scrape(client, conn.address)
 		for _, collector := range collectors {
 			collector.Collect(ch)
 		}
@@ -180,7 +189,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 }
 
 // scrape retrieves all the available metrics and invoke the given callback on each of them.
-func (e *Exporter) scrape(conn *beanstalk.Conn) []prometheus.Collector {
+func (e *Exporter) scrape(conn *beanstalk.Conn, address string) []prometheus.Collector {
 	var collectors []prometheus.Collector
 	start := time.Now()
 	defer func() {
@@ -188,7 +197,7 @@ func (e *Exporter) scrape(conn *beanstalk.Conn) []prometheus.Collector {
 	}()
 
 	if *logLevel == "debug" {
-		log.Debugf("Debug: Calling %s stats()", e.address)
+		log.Debugf("Debug: Calling %s stats()", address)
 	}
 
 	stats, err := conn.Stats()
@@ -212,7 +221,7 @@ func (e *Exporter) scrape(conn *beanstalk.Conn) []prometheus.Collector {
 		gauge := prometheus.NewGauge(prometheus.GaugeOpts{
 			Name:        name,
 			Help:        help,
-			ConstLabels: prometheus.Labels{"instance": e.address},
+			ConstLabels: prometheus.Labels{"instance": address},
 		})
 
 		iValue, _ := strconv.ParseFloat(value, 64)
@@ -221,7 +230,7 @@ func (e *Exporter) scrape(conn *beanstalk.Conn) []prometheus.Collector {
 	}
 
 	if *logLevel == "debug" {
-		log.Debugf("Debug: Calling %s ListTubes()", e.address)
+		log.Debugf("Debug: Calling %s ListTubes()", address)
 	}
 
 	// stat every tube
@@ -235,7 +244,7 @@ func (e *Exporter) scrape(conn *beanstalk.Conn) []prometheus.Collector {
 
 	var outs []<-chan []prometheus.Collector
 	for i, tube := range tubes {
-		out := e.scrapeWorker(i, conn, tube)
+		out := e.scrapeWorker(i, conn, tube, address)
 		outs = append(outs, out)
 	}
 	for _, out := range outs {
@@ -245,7 +254,7 @@ func (e *Exporter) scrape(conn *beanstalk.Conn) []prometheus.Collector {
 	return collectors
 }
 
-func (e *Exporter) scrapeWorker(i int, c *beanstalk.Conn, name string) <-chan []prometheus.Collector {
+func (e *Exporter) scrapeWorker(i int, c *beanstalk.Conn, name string, address string) <-chan []prometheus.Collector {
 	out := make(chan []prometheus.Collector)
 
 	go func() {
@@ -258,7 +267,7 @@ func (e *Exporter) scrapeWorker(i int, c *beanstalk.Conn, name string) <-chan []
 			log.Debugf("Debug: scrape worker %d fetching tube %s", i, name)
 		}
 
-		out <- e.statTube(c, name)
+		out <- e.statTube(c, name, address)
 
 		if *logLevel == "debug" {
 			log.Debugf("Debug: scrape worker %d finished", i)
@@ -267,11 +276,11 @@ func (e *Exporter) scrapeWorker(i int, c *beanstalk.Conn, name string) <-chan []
 	return out
 }
 
-func (e *Exporter) statTube(c *beanstalk.Conn, tubeName string) []prometheus.Collector {
+func (e *Exporter) statTube(c *beanstalk.Conn, tubeName string, address string) []prometheus.Collector {
 	var collectors []prometheus.Collector
 
 	if *logLevel == "debug" {
-		log.Debugf("Debug: Calling %s Tube{name: %s}.Stats()", e.address, tubeName)
+		log.Debugf("Debug: Calling %s Tube{name: %s}.Stats()", address, tubeName)
 	}
 
 	var labels prometheus.Labels
@@ -284,7 +293,7 @@ func (e *Exporter) statTube(c *beanstalk.Conn, tubeName string) []prometheus.Col
 		labels = prometheus.Labels{"tube": tubeName}
 	}
 
-	labels["instance"] = e.address
+	labels["instance"] = address
 
 	// be sure all labels are set
 	allLabelNames := append(mapper.getAllLabels(), "instance", "tube")
