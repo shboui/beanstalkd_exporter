@@ -23,6 +23,7 @@ type Exporter struct {
 
 	conns     []*beanstalkdConn
 	addresses string
+	metricsPrefix string
 
 	connectionTimeout time.Duration
 
@@ -224,7 +225,7 @@ func (e *Exporter) scrape(conn *beanstalk.Conn, address string) []prometheus.Col
 			help = key
 		}
 		gauge := prometheus.NewGauge(prometheus.GaugeOpts{
-			Name:        name,
+			Name:        e.metricsPrefix+name,
 			Help:        help,
 			ConstLabels: prometheus.Labels{"instance": address},
 		})
@@ -330,7 +331,7 @@ func (e *Exporter) statTube(c *beanstalk.Conn, tubeName string, address string) 
 		}
 
 		gaugeVec := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: name,
+			Name: e.metricsPrefix+name,
 			Help: help,
 		}, allLabelNames)
 
