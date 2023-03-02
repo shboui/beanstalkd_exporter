@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"net/http"
+	"strings"
 
 	"github.com/howeyc/fsnotify"
 	"github.com/prometheus/client_golang/prometheus"
@@ -19,6 +20,7 @@ var (
 	numTubeStatWorkers = flag.Int("num-tube-stat-workers", 1, "The number of concurrent workers to use to fetch tube stats.")
 	listenAddress      = flag.String("web.listen-address", ":8080", "Address to listen on for web interface and telemetry.")
 	metricsPath        = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics.")
+	metricsPrefix        = flag.String("metrics.prefix", "beanstalkd_", "Prefix of the metrics.")
 )
 
 var (
