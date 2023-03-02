@@ -6,3 +6,4 @@
 /pkg
 /vendor/pkg
 .idea
+beanstalkdExporter

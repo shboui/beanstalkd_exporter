@@ -21,7 +21,7 @@ type Exporter struct {
 	// use to protect against concurrent collection
 	mutex sync.RWMutex
 
-	conns     []*btconn
+	conns     []*beanstalkdConn
 	addresses string
 
 	connectionTimeout time.Duration
@@ -40,7 +40,7 @@ type Exporter struct {
 	cherrs chan error
 }
 
-type btconn struct {
+type beanstalkdConn struct {
 	address string
 	conn    io.ReadWriteCloser
 }
@@ -79,15 +79,20 @@ func NewExporter(addresses string) *Exporter {
 	}
 
 	// init conns
-	addrs := strings.Split(exporter.addresses, ",")
-	for _, addr := range addrs {
+	addrList := strings.Split(exporter.addresses, ",")
+	for _, addr := range addrList {
+
+		if addr == "" {
+			continue
+		}
+
 		conn, err := newLazyConn(addr, dialTimeout, exporter.connectionTimeout)
 		if err != nil {
 			exporter.scrapeConnectionErrorMetric.Inc()
 			log.Warnf("unable to connect to beanstalkd: %s", err)
 			continue
 		}
-		connInfo := &btconn{
+		connInfo := &beanstalkdConn{
 			address: addr,
 			conn:    conn,
 		}
